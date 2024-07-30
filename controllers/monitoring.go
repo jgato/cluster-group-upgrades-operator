@@ -67,32 +67,47 @@ func (r *ClusterGroupUpgradeReconciler) getMonitoredObjects(managedPolicy *unstr
 			return nil, fmt.Errorf("policy %s is missing its spec.policy-templates.objectDefinition.spec", managedPolicyName)
 		}
 
-		// Get the object-templates from the spec.
-		specContent := spec.(map[string]interface{})
-
-		// One and only one of [object-templates, object-templates-raw] should be defined
-		objectTemplatePresent := specContent[utils.ObjectTemplates] != nil
-		objectTemplateRawPresent := specContent[utils.ObjectTemplatesRaw] != nil
+		var plcTmplKind = objectDefinitionContent["kind"]
+		var plcTmplDefMetadataName = objectDefinitionContent["metadata"].(map[string]interface{})["name"].(string)
+		fmt.Println("Monitoring ", plcTmplDefMetadataName, " of kind ", plcTmplKind)
 
 		var marshalledObjectTemplates interface{}
 
-		switch {
-		case objectTemplatePresent && objectTemplateRawPresent:
-			return nil, fmt.Errorf("[getMonitoredObjects] found both %s and %s in policyTemplate", utils.ObjectTemplates, utils.ObjectTemplatesRaw)
-		case !objectTemplatePresent && !objectTemplateRawPresent:
-			return nil, fmt.Errorf("[getMonitoredObjects] can't find %s or %s in policyTemplate", utils.ObjectTemplates, utils.ObjectTemplatesRaw)
-		case objectTemplatePresent:
-			marshalledObjectTemplates = specContent[utils.ObjectTemplates]
-		case objectTemplateRawPresent:
-			stringTemplate := utils.StripObjectTemplatesRaw(specContent[utils.ObjectTemplatesRaw].(string))
+		if plcTmplKind == "ConfigurationPolicy" {
 
-			var err error
-			marshalledObjectTemplates, err = utils.StringToYaml(stringTemplate)
-			if err != nil {
-				return nil, fmt.Errorf("%s", utils.ConfigPlcFailRawMarshal)
+			// Get the object-templates from the spec.
+			specContent := spec.(map[string]interface{})
+
+			// One and only one of [object-templates, object-templates-raw] should be defined
+			objectTemplatePresent := specContent[utils.ObjectTemplates] != nil
+			objectTemplateRawPresent := specContent[utils.ObjectTemplatesRaw] != nil
+
+			switch {
+			case objectTemplatePresent && objectTemplateRawPresent:
+				return nil, fmt.Errorf("[getMonitoredObjects] found both %s and %s in policyTemplate", utils.ObjectTemplates, utils.ObjectTemplatesRaw)
+			case !objectTemplatePresent && !objectTemplateRawPresent:
+				return nil, fmt.Errorf("[getMonitoredObjects] can't find %s or %s in policyTemplate", utils.ObjectTemplates, utils.ObjectTemplatesRaw)
+			case objectTemplatePresent:
+				marshalledObjectTemplates = specContent[utils.ObjectTemplates]
+			case objectTemplateRawPresent:
+				stringTemplate := utils.StripObjectTemplatesRaw(specContent[utils.ObjectTemplatesRaw].(string))
+
+				var err error
+				marshalledObjectTemplates, err = utils.StringToYaml(stringTemplate)
+				if err != nil {
+					return nil, fmt.Errorf("%s", utils.ConfigPlcFailRawMarshal)
+				}
+			default:
+				return nil, fmt.Errorf("[getMonitoredObjects] can't find %s or %s in policyTemplate", utils.ObjectTemplates, utils.ObjectTemplatesRaw)
 			}
-		default:
-			return nil, fmt.Errorf("[getMonitoredObjects] can't find %s or %s in policyTemplate", utils.ObjectTemplates, utils.ObjectTemplatesRaw)
+		} else if plcTmplKind == "OperatorPolicy" {
+			//OperatorPolicy is directly and object with its spec, metadata, etc
+			//and only one element
+			marshalledObjectTemplates = append(make([]interface{}, 0), objectDefinitionContent)
+		} else {
+			r.Log.Info(
+				"[getMonitoredObjects] skipping object because kind type is supported")
+			continue
 		}
 
 		objectTemplatesContent := marshalledObjectTemplates.([]interface{})
@@ -104,12 +119,19 @@ func (r *ClusterGroupUpgradeReconciler) getMonitoredObjects(managedPolicy *unstr
 					"policyName", managedPolicyName)
 				continue
 			}
-			innerObjectDefinition := objectTemplateContent["objectDefinition"]
-			if innerObjectDefinition == nil {
-				return nil, fmt.Errorf("policy %s is missing its spec.policy-templates.objectDefinition.spec.object-templates.objectDefinition", managedPolicyName)
-			}
 
-			innerObjectDefinitionContent := innerObjectDefinition.(map[string]interface{})
+			var innerObjectDefinitionContent map[string]interface{}
+
+			if plcTmplKind == "ConfigurationPolicy" {
+				innerObjectDefinition := objectTemplateContent["objectDefinition"]
+				if innerObjectDefinition == nil {
+					return nil, fmt.Errorf("policy %s is missing its spec.policy-templates.objectDefinition.spec.object-templates.objectDefinition", managedPolicyName)
+				}
+
+				innerObjectDefinitionContent = innerObjectDefinition.(map[string]interface{})
+			} else {
+				innerObjectDefinitionContent = objectTemplateContent
+			}
 			// Get the object's metadata.
 			objectDefinitionMetadata := innerObjectDefinitionContent["metadata"]
 			if objectDefinitionMetadata == nil {

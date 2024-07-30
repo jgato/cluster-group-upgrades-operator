@@ -140,6 +140,7 @@ const (
 
 // Policy errors
 const (
+	PlcWrongTmplDef          = "policy is wrong kind."
 	PlcMissTmplDef           = "policy is missing its spec.policy-templates.objectDefinition"
 	PlcMissTmplDefMeta       = "policy is missing its spec.policy-templates.objectDefinition.metadata"
 	PlcMissTmplDefSpec       = "policy is missing its spec.policy-templates.objectDefinition.spec"

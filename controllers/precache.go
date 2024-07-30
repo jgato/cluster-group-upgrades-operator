@@ -181,45 +181,72 @@ func stripPolicy(
 
 	for _, policyTemplate := range policyTemplates.([]interface{}) {
 
-		plcTmplDefSpec := policyTemplate.(map[string]interface {
+		plcTmplDefKind := policyTemplate.(map[string]interface {
 		})["objectDefinition"].(map[string]interface {
-		})["spec"].(map[string]interface{})
+		})["kind"].(string)
 
-		// One and only one of [object-templates, object-templates-raw] should be defined
-		objectTemplatePresent := plcTmplDefSpec[utils.ObjectTemplates] != nil
-		objectTemplateRawPresent := plcTmplDefSpec[utils.ObjectTemplatesRaw] != nil
+		plcTmplDefMetadataName := policyTemplate.(map[string]interface {
+		})["objectDefinition"].(map[string]interface {
+		})["metadata"].(map[string]interface{})["name"].(string)
+		fmt.Println("Strip object of ", plcTmplDefMetadataName, " of kind ", plcTmplDefKind)
 
-		var objTemplates interface{}
+		if plcTmplDefKind == "ConfigurationPolicy" {
+			plcTmplDefSpec := policyTemplate.(map[string]interface {
+			})["objectDefinition"].(map[string]interface {
+			})["spec"].(map[string]interface{})
 
-		switch {
-		case objectTemplatePresent && objectTemplateRawPresent:
-			return nil, fmt.Errorf("[stripPolicy] found both %s and %s in policyTemplate", utils.ObjectTemplates, utils.ObjectTemplatesRaw)
-		case !objectTemplatePresent && !objectTemplateRawPresent:
-			return nil, fmt.Errorf("[stripPolicy] can't find %s or %s in policyTemplate", utils.ObjectTemplates, utils.ObjectTemplatesRaw)
-		case objectTemplatePresent:
-			objTemplates = plcTmplDefSpec[utils.ObjectTemplates]
-		case objectTemplateRawPresent:
-			stringTemplate := utils.StripObjectTemplatesRaw(plcTmplDefSpec[utils.ObjectTemplatesRaw].(string))
+			// One and only one of [object-templates, object-templates-raw] should be defined
+			objectTemplatePresent := plcTmplDefSpec[utils.ObjectTemplates] != nil
+			objectTemplateRawPresent := plcTmplDefSpec[utils.ObjectTemplatesRaw] != nil
 
-			var err error
-			objTemplates, err = utils.StringToYaml(stringTemplate)
-			if err != nil {
-				return nil, fmt.Errorf("%s", utils.ConfigPlcFailRawMarshal)
+			var objTemplates interface{}
+
+			switch {
+			case objectTemplatePresent && objectTemplateRawPresent:
+				return nil, fmt.Errorf("[stripPolicy] found both %s and %s in policyTemplate", utils.ObjectTemplates, utils.ObjectTemplatesRaw)
+			case !objectTemplatePresent && !objectTemplateRawPresent:
+				return nil, fmt.Errorf("[stripPolicy] can't find %s or %s in policyTemplate", utils.ObjectTemplates, utils.ObjectTemplatesRaw)
+			case objectTemplatePresent:
+				objTemplates = plcTmplDefSpec[utils.ObjectTemplates]
+			case objectTemplateRawPresent:
+				stringTemplate := utils.StripObjectTemplatesRaw(plcTmplDefSpec[utils.ObjectTemplatesRaw].(string))
+
+				var err error
+				objTemplates, err = utils.StringToYaml(stringTemplate)
+				if err != nil {
+					return nil, fmt.Errorf("%s", utils.ConfigPlcFailRawMarshal)
+				}
+			default:
+				return nil, fmt.Errorf("[stripPolicy] can't find %s or %s in policyTemplate", utils.ObjectTemplates, utils.ObjectTemplatesRaw)
 			}
-		default:
-			return nil, fmt.Errorf("[stripPolicy] can't find %s or %s in policyTemplate", utils.ObjectTemplates, utils.ObjectTemplatesRaw)
-		}
 
-		for _, objTemplate := range objTemplates.([]interface{}) {
-			complianceType := objTemplate.(map[string]interface{})["complianceType"]
+			for _, objTemplate := range objTemplates.([]interface{}) {
+				complianceType := objTemplate.(map[string]interface{})["complianceType"]
+				if complianceType == "mustnothave" {
+					continue
+				}
+				spec := objTemplate.(map[string]interface{})["objectDefinition"]
+				if spec == nil {
+					return nil, fmt.Errorf("[stripPolicy] can't find any objectDefinition")
+				}
+				objects = append(objects, spec.(map[string]interface{}))
+			}
+		} else if plcTmplDefKind == "OperatorPolicy" {
+			// if OperatorPolicy we would have to just return the object
+			// considering the OpreatorPolicy as always a single object
+			complianceType := policyTemplate.(map[string]interface {
+			})["objectDefinition"].(map[string]interface {
+			})["spec"].(map[string]interface{})["complianceType"]
+
 			if complianceType == "mustnothave" {
 				continue
 			}
-			spec := objTemplate.(map[string]interface{})["objectDefinition"]
-			if spec == nil {
-				return nil, fmt.Errorf("[stripPolicy] can't find any objectDefinition")
-			}
-			objects = append(objects, spec.(map[string]interface{}))
+			operatorPolicy := policyTemplate.(map[string]interface {
+			})["objectDefinition"].(map[string]interface {
+			})
+			objects = append(objects, operatorPolicy)
+		} else {
+			return nil, fmt.Errorf("[stripPolicy] not supported kind of objectDefinition")
 		}
 	}
 	return objects, nil

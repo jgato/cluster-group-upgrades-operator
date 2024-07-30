@@ -148,10 +148,10 @@ func InspectPolicyObjects(policy *unstructured.Unstructured) (bool, error) {
 	policyName := policy.GetName()
 	policySpec := policy.Object["spec"].(map[string]interface{})
 
-	// Get the policy templates.
+	// Get the policy templates. An [] of objet-definitions
 	policyTemplates := policySpec["policy-templates"].([]interface{})
 
-	// Go through the policy policy-templates.
+	// Go through the policy policy-templates to get all the object-definitions
 	for _, plcTmpl := range policyTemplates {
 		// Make sure the objectDefinition of the policy template exists.
 		if plcTmpl.(map[string]interface{})["objectDefinition"] == nil {
@@ -159,51 +159,66 @@ func InspectPolicyObjects(policy *unstructured.Unstructured) (bool, error) {
 		}
 		plcTmplDef := plcTmpl.(map[string]interface{})["objectDefinition"].(map[string]interface{})
 
-		// Make sure the ConfigurationPolicy metadata exists.
+		// Make sure the objectDefinition.metadata exists.
 		if plcTmplDef["metadata"] == nil {
 			return containsStatus, &PolicyErr{policyName, PlcMissTmplDefMeta}
 		}
 
-		// Make sure the ConfigurationPolicy spec exists.
-		if plcTmplDef["spec"] == nil {
-			return containsStatus, &PolicyErr{policyName, PlcMissTmplDefSpec}
-		}
-		plcTmplDefSpec := plcTmplDef["spec"].(map[string]interface{})
+		// Here we make a distinction between
+		// the different allowed objectDefinition Kinds
+		var plcTmplKind = plcTmplDef["kind"]
+		var plcTmplDefMetadataName = plcTmplDef["metadata"].(map[string]interface{})["name"].(string)
+		fmt.Println("Policy ", plcTmplDefMetadataName, " of kind ", plcTmplKind)
 
-		// One and only one of [object-templates, object-templates-raw] should be defined
-		objectTemplatePresent := plcTmplDefSpec[ObjectTemplates] != nil
-		objectTemplateRawPresent := plcTmplDefSpec[ObjectTemplatesRaw] != nil
+		if plcTmplKind == "ConfigurationPolicy" {
+			// Make sure the objectDefinition.spec exists.
+			if plcTmplDef["spec"] == nil {
+				return containsStatus, &PolicyErr{policyName, PlcMissTmplDefSpec}
+			}
+			plcTmplDefSpec := plcTmplDef["spec"].(map[string]interface{})
 
-		var configPlcTmpls interface{}
+			// One and only one of [object-templates, object-templates-raw] should be defined
+			objectTemplatePresent := plcTmplDefSpec[ObjectTemplates] != nil
+			objectTemplateRawPresent := plcTmplDefSpec[ObjectTemplatesRaw] != nil
 
-		switch {
-		case objectTemplatePresent && objectTemplateRawPresent:
-			return containsStatus, &PolicyErr{policyName, ConfigPlcHasBothObjTmpl}
-		case objectTemplatePresent:
-			configPlcTmpls = plcTmplDefSpec[ObjectTemplates].([]interface{})
-		case objectTemplateRawPresent:
-			stringTemplate := StripObjectTemplatesRaw(plcTmplDefSpec[ObjectTemplatesRaw].(string))
+			var configPlcTmpls interface{}
 
-			var err error
-			configPlcTmpls, err = StringToYaml(stringTemplate)
-			if err != nil {
-				return containsStatus, &PolicyErr{policyName, ConfigPlcFailRawMarshal}
+			switch {
+			case objectTemplatePresent && objectTemplateRawPresent:
+				return containsStatus, &PolicyErr{policyName, ConfigPlcHasBothObjTmpl}
+			case objectTemplatePresent:
+				configPlcTmpls = plcTmplDefSpec[ObjectTemplates].([]interface{})
+			case objectTemplateRawPresent:
+				stringTemplate := StripObjectTemplatesRaw(plcTmplDefSpec[ObjectTemplatesRaw].(string))
+
+				var err error
+				configPlcTmpls, err = StringToYaml(stringTemplate)
+				if err != nil {
+					return containsStatus, &PolicyErr{policyName, ConfigPlcFailRawMarshal}
+				}
+
+			default:
+				return containsStatus, &PolicyErr{policyName, ConfigPlcMissAnyObjTmpl}
 			}
 
-		default:
-			return containsStatus, &PolicyErr{policyName, ConfigPlcMissAnyObjTmpl}
-		}
-
-		// Go through the ConfigurationPolicy object-templates.
-		for _, configPlcTmpl := range configPlcTmpls.([]interface{}) {
-			// Make sure the objectDefinition of the ConfigurationPolicy object template exists.
-			if configPlcTmpl.(map[string]interface{})["objectDefinition"] == nil {
-				return containsStatus, &PolicyErr{policyName, ConfigPlcMissObjTmplDef}
+			// Go through the ConfigurationPolicy object-templates.
+			for _, configPlcTmpl := range configPlcTmpls.([]interface{}) {
+				// Make sure the objectDefinition of the ConfigurationPolicy object template exists.
+				if configPlcTmpl.(map[string]interface{})["objectDefinition"] == nil {
+					return containsStatus, &PolicyErr{policyName, ConfigPlcMissObjTmplDef}
+				}
+				objectDefinition := configPlcTmpl.(map[string]interface{})["objectDefinition"].(map[string]interface{})
+				if objectDefinition["status"] != nil {
+					containsStatus = true
+				}
 			}
-			objectDefinition := configPlcTmpl.(map[string]interface{})["objectDefinition"].(map[string]interface{})
-			if objectDefinition["status"] != nil {
-				containsStatus = true
-			}
+		} else if plcTmplDef["kind"] == "OperatorPolicy" {
+			// if OperatorPolicy we would have to implement some checks
+			// OperatorPolicy has no status
+			containsStatus = false
+		} else {
+			// elseif the objectDefinition.kind is not supported
+			return containsStatus, &PolicyErr{policyName, PlcWrongTmplDef}
 		}
 	}
 	return containsStatus, nil
